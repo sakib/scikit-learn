@@ -2,6 +2,7 @@
 """ Script to test my stuff """
 
 # imports
+import random
 from collections import defaultdict
 from numpy import dot, array, add
 from numpy.linalg import norm
@@ -9,21 +10,6 @@ from scipy.sparse import csr_matrix
 from matplotlib import pyplot as plt
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-
-# constants
-TWENTY_TRAIN = fetch_20newsgroups()
-COUNT_VECT = CountVectorizer()
-TFIDF_TRANSFORMER = TfidfTransformer()
-N_NEWSGROUPS = len(TWENTY_TRAIN.target_names)
-DATA_REPS = ['BAG', 'TOKEN', 'TFIDF']
-ONE_OUT_OF = 100
-
-# partition newsgroups
-DOCUMENT_PARTITION = [[] for x in range(N_NEWSGROUPS)]
-for i in range(len(TWENTY_TRAIN.target)):
-    t = TWENTY_TRAIN.target[i]
-    DOCUMENT_PARTITION[t].append(i)
-
 
 def cos_sim(one, one_id, two, two_id, norms):
     """ Calculates cosime similarity between two vectors of same length """
@@ -57,16 +43,23 @@ def marginal_unit_vector_sums(partitions, models):
     for data_rep in DATA_REPS:
         summations[data_rep] = [0 for a in range(len(partitions))]
 
-    for data_rep, model in models:
+    for data_rep, model in models.items():
         for n_id in range(n_partitions):
-            for doc_idx in partitions[n_id]:
-                vector = model.getrow(doc_idx).toarray()[0]
+            for doc_index in partitions[n_id]:
+                vector = model.getrow(doc_index).toarray()[0]
                 summations[data_rep][n_id] = add(summations[data_rep][n_id], vector/norm(vector))
 
     return summations
 
+
+# constants
+TWENTY_TRAIN = fetch_20newsgroups()
+COUNT_VECT = CountVectorizer()
+TFIDF_TRANSFORMER = TfidfTransformer()
+N_NEWSGROUPS = len(TWENTY_TRAIN.target_names)
+
 # set up matrices, norms, and final scores for each data representation method
-print('Building model: bag of words...')
+print('Building model: BAG')
 WORDS = set()
 DELIMITERS = '/\\\'\"!@#$%^&*()-+{}[]:;.,~`\t\n<>?=_'
 
@@ -103,130 +96,62 @@ for k, v in POSITIONS.items():
     COL.append(k[1])
     DATA.append(v)
 
-SHAPE_BAG = (len(TWENTY_TRAIN.target), len(WORDS))
-M_BAG = csr_matrix((array(DATA), (array(ROW), array(COL))), shape=SHAPE_BAG)
-NORMS_BAG = get_row_norms(M_BAG)
-AVG_SCORES_BAG = [[-1 for x in range(N_NEWSGROUPS)] for x in range(N_NEWSGROUPS)]
+M_BAG = csr_matrix((array(DATA), (array(ROW), array(COL))),
+                   shape=(len(TWENTY_TRAIN.target), len(WORDS)))
 
-
-print('Building model: Tokenized...')
+print('Building model: TOKEN...')
 M_TOKEN = COUNT_VECT.fit_transform(TWENTY_TRAIN.data)
-NORMS_TOKEN = get_row_norms(M_TOKEN)
-AVG_SCORES_TOKEN = [[-1 for x in range(N_NEWSGROUPS)] for x in range(N_NEWSGROUPS)]
-
 
 print('Building model: TFIDF...')
 M_TFIDF = TFIDF_TRANSFORMER.fit_transform(M_TOKEN)
-NORMS_TFIDF = get_row_norms(M_TFIDF)
 
+# partition newsgroups
+DOCUMENT_PARTITION = [[] for x in range(N_NEWSGROUPS)]
+for i in range(len(TWENTY_TRAIN.target)):
+    t = TWENTY_TRAIN.target[i]
+    DOCUMENT_PARTITION[t].append(i)
+
+DATA_REPS = ['BAG', 'TOKEN', 'TFIDF']
 MODELS = {'BAG': M_BAG, 'TOKEN': M_TOKEN, 'TFIDF': M_TFIDF}
 GROUPS = [partition[:100] for partition in DOCUMENT_PARTITION]
 QUERIES = [partition[100:len(partition)] for partition in DOCUMENT_PARTITION]
 THRESHOLDS = [i/10 for i in range(11)]
-
 SCORE_MAPS = defaultdict()
+NORMS = defaultdict()
+
+
 for rep in DATA_REPS:
+    NORMS[rep] = get_row_norms(MODELS[rep])
     SCORE_MAPS[rep] = [[-1 for x in range(N_NEWSGROUPS)] for x in range(N_NEWSGROUPS)]
 
 print('Doing the thing!')
 
-"""
-# 2.3.3
-
-PRECISIONS_BAG, RECALLS_BAG = [[0 for i in range(11)] for x in range(2)]
-PRECISIONS_TOKEN, RECALLS_TOKEN = [[0 for i in range(11)] for x in range(2)]
-PRECISIONS_TFIDF, RECALLS_TFIDF = [[0 for i in range(11)] for x in range(2)]
-
-for t in range(len(THRESHOLDS)-1):
-    count_bag, count_token, count_tfidf = [0 for x in range(3)]
-    tol = THRESHOLDS[t]
-    for newsgroup_id in range(0, len(QUERIES)):
-        for query_idx in QUERIES[newsgroup_id]:
-            # given a query and threshold, calculate average precision/recall over all newsgroups
-            if random.randrange(0, ONE_OUT_OF) != 0:
-                continue
-            dr_bag, dt_bag, dr_token, dt_token, dr_tfidf, dt_tfidf = [0 for x in range(6)]
-            NR = len(GROUPS[newsgroup_id])
-            for group_id in range(0, len(GROUPS)):
-                for doc_idx in GROUPS[group_id]:
-                    # bag of words
-                    query_vector = M_BAG.getrow(query_idx).toarray()[0]
-                    doc_vector = M_BAG.getrow(doc_idx).toarray()[0]
-                    if cos_sim(query_vector, query_idx, doc_vector, doc_idx, NORMS_BAG) > tol:
-                        dt_bag += 1
-                        if group_id == newsgroup_id:
-                            dr_bag += 1
-                    # tokenized
-                    query_vector = M_TOKEN.getrow(query_idx).toarray()[0]
-                    doc_vector = M_TOKEN.getrow(doc_idx).toarray()[0]
-                    if cos_sim(query_vector, query_idx, doc_vector, doc_idx, NORMS_TOKEN) > tol:
-                        dt_token += 1
-                        if group_id == newsgroup_id:
-                            dr_token += 1
-                    # tfidf
-                    query_vector = M_TFIDF.getrow(query_idx).toarray()[0]
-                    doc_vector = M_TFIDF.getrow(doc_idx).toarray()[0]
-                    if cos_sim(query_vector, query_idx, doc_vector, doc_idx, NORMS_TFIDF) > tol:
-                        dt_tfidf += 1
-                        if group_id == newsgroup_id:
-                            dr_tfidf += 1
-            if dt_bag != 0:
-                count_bag += 1
-                PRECISIONS_BAG[t] += dr_bag/dt_bag
-            RECALLS_BAG[t] += dr_bag/NR
-            if dt_token != 0:
-                count_token += 1
-                PRECISIONS_TOKEN[t] += dr_token/dt_token
-            RECALLS_TOKEN[t] += dr_token/NR
-            if dt_tfidf != 0:
-                count_tfidf += 1
-                PRECISIONS_TFIDF[t] += dr_tfidf/dt_tfidf
-            RECALLS_TFIDF[t] += dr_tfidf/NR
-            print('bag:', count_bag, '| token:', count_token, '| tfidf:', count_tfidf, '| query:', \
-            query_idx, '| newsgroup:', TWENTY_TRAIN.target_names[newsgroup_id], '| threshold:', tol)
-    if count_bag != 0:
-        PRECISIONS_BAG[t] /= count_bag
-        RECALLS_BAG[t] /= count_bag
-    if count_token != 0:
-        PRECISIONS_TOKEN[t] /= count_token
-        RECALLS_TOKEN[t] /= count_token
-    if count_tfidf != 0:
-        PRECISIONS_TFIDF[t] /= count_tfidf
-        RECALLS_TFIDF[t] /= count_tfidf
-    print('bag of words: precisions', PRECISIONS_BAG)
-    print('bag of words: recalls', RECALLS_BAG)
-    print('tokenized: precisions', PRECISIONS_TOKEN)
-    print('tokenized: recalls', RECALLS_TOKEN)
-    print('tfidf: precisions', PRECISIONS_TFIDF)
-    print('tfidf: recalls', RECALLS_TFIDF)
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.plot(RECALLS_BAG, PRECISIONS_BAG)
-plt.title('Precision-Recall Curve: Bag of Words')
-plt.show()
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.plot(RECALLS_TOKEN, PRECISIONS_TOKEN)
-plt.title('Precision-Recall Curve: Tokenized')
-plt.show()
-
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.plot(RECALLS_TFIDF, PRECISIONS_TFIDF)
-plt.title('Precision-Recall Curve: TFIDF')
-plt.show()
-"""
 
 # """
-# 2.3.2
+print('Problem 2.2...')
+DOC_SUMS = marginal_unit_vector_sums(DOCUMENT_PARTITION, MODELS)
+
+for a in range(N_NEWSGROUPS):
+    for b in range(N_NEWSGROUPS):
+        iters = len(DOCUMENT_PARTITION[a]*len(DOCUMENT_PARTITION[b]))
+        print('---\navg sims for newsgroups: {0} {1} for {2} total pairs'.format(
+            TWENTY_TRAIN.target_names[a], TWENTY_TRAIN.target_names[b], iters))
+        if SCORE_MAPS[DATA_REPS[0]][a][b] != -1:
+            continue
+        for rep, score_map in SCORE_MAPS.items():
+            score_map[a][b] = dot(DOC_SUMS[rep][a], DOC_SUMS[rep][b])/iters
+            print('{0}\t{1}'.format(rep, score_map[a][b]))
+
+# show matrices as heatmaps
+for rep, score_map in SCORE_MAPS.items():
+    plt.title('Average Similarities b/w Newsgroups: {}'.format(rep))
+    plt.imshow(score_map, cmap='hot', interpolation='nearest')
+    plt.show()
+# """
+
+
+# """
+print('Problem 2.3.2...')
 GROUP_SUMS = marginal_unit_vector_sums(GROUPS, MODELS)
 QUERY_SUMS = marginal_unit_vector_sums(QUERIES, MODELS)
 
@@ -237,55 +162,58 @@ for a in range(N_NEWSGROUPS):
             TWENTY_TRAIN.target_names[a], TWENTY_TRAIN.target_names[b], iters))
         for rep, score_map in SCORE_MAPS.items():
             score_map[a][b] = dot(GROUP_SUMS[rep][a], QUERY_SUMS[rep][b])/iters
-            print(rep, '\t', SCORE_MAPS[rep][a][b])
+            print('{0}\t{1}'.format(rep, score_map[a][b]))
 
 # show matrices as heatmaps
 for rep, score_map in SCORE_MAPS.items():
-    plt.title('Average Similarities b/w Newsgroups: {}'.format(rep))
+    plt.title('Average Similarities b/w Queries/Newsgroups: {}'.format(rep))
     plt.imshow(score_map, cmap='hot', interpolation='nearest')
     plt.show()
 # """
 
-"""
-# 2.2
-print('Calculating marginal newsgroup unit vector summations...')
-SUMS_BAG, SUMS_TOKEN, SUMS_TFIDF = marginal_unit_vector_sums(DOCUMENT_PARTITION, MODELS)
+# """ Feel free to tinker with the value of ONE_OUT_OF - this is a sampling rate
+print('Problem 2.3.2...')
+ONE_OUT_OF = 1000
+PRECISIONS, RECALLS, COUNTS, DR, DT = [defaultdict() for x in range(5)]
+for rep in DATA_REPS:
+    RECALLS[rep], PRECISIONS[rep] = [[0 for i in range(len(THRESHOLDS))] for j in range(2)]
 
-for a in range(N_NEWSGROUPS):
-    for b in range(N_NEWSGROUPS):
-        newsgrp_a = TWENTY_TRAIN.target_names[a]
-        newsgrp_b = TWENTY_TRAIN.target_names[b]
+for t in range(len(THRESHOLDS)-1):
+    for rep in DATA_REPS:
+        COUNTS[rep] = 0
+        # given a query, threshold, and data rep, calculate avg precision/recall over all newsgroups
+        for newsgroup_id in range(N_NEWSGROUPS):
+            for query_idx in QUERIES[newsgroup_id]:
+                if random.randrange(0, ONE_OUT_OF) != 0:
+                    continue
+                DR[rep], DT[rep] = [0 for j in range(2)]
+                for group_id in range(N_NEWSGROUPS):
+                    for doc_idx in GROUPS[group_id]:
+                        query = MODELS[rep].getrow(query_idx).toarray()[0]
+                        doc = MODELS[rep].getrow(doc_idx).toarray()[0]
+                        if cos_sim(query, query_idx, doc, doc_idx, NORMS[rep]) > THRESHOLDS[t]:
+                            DT[rep] += 1
+                            if group_id == newsgroup_id:
+                                DR[rep] += 1
+                if DT[rep] != 0:
+                    COUNTS[rep] += 1
+                    PRECISIONS[rep][t] += DR[rep]/DT[rep]
+                RECALLS[rep][t] += DR[rep]/len(GROUPS[newsgroup_id])
+                print('{0}\trep: {1}\tquery: {2}\tgroup: {3}\tthreshold: {4}'.format(COUNTS[rep],\
+                        rep, query_idx, TWENTY_TRAIN.target_names[newsgroup_id], THRESHOLDS[t]))
+        if COUNTS[rep] != 0:
+            PRECISIONS[rep][t] /= COUNTS[rep]
+            RECALLS[rep][t] /= COUNTS[rep]
+        print('{0}\tprecisions: {1}\n{3}\trecalls: {2}'.\
+                format(rep, PRECISIONS[rep], rep, RECALLS[rep]))
 
-        iters = len(DOCUMENT_PARTITION[a]*len(DOCUMENT_PARTITION[b]))
-        print('------------------------------------')
-        print('newsgroups:', newsgrp_a, newsgrp_b, '|', iters, ' total pairs')
-
-        if AVG_SCORES_TOKEN[a][b] != -1:
-            continue
-
-        cos_sum_bag = dot(SUMS_BAG[a], SUMS_BAG[b])
-        cos_sum_token = dot(SUMS_TOKEN[a], SUMS_TOKEN[b])
-        cos_sum_tfidf = dot(SUMS_TFIDF[a], SUMS_TFIDF[b])
-
-        AVG_SCORES_BAG[a][b] = cos_sum_bag/iters
-        AVG_SCORES_BAG[b][a] = cos_sum_bag/iters
-        print('avg sim on bag rep:\t', cos_sum_bag/iters)
-
-        AVG_SCORES_TOKEN[a][b] = cos_sum_token/iters
-        AVG_SCORES_TOKEN[b][a] = cos_sum_token/iters
-        print('avg sim on token rep:\t', cos_sum_token/iters)
-
-        AVG_SCORES_TFIDF[a][b] = cos_sum_tfidf/iters
-        AVG_SCORES_TFIDF[b][a] = cos_sum_tfidf/iters
-        print('avg sim on tfidf rep:\t', cos_sum_tfidf/iters)
-
-# show matrices as heatmaps
-plt.imshow(AVG_SCORES_BAG, cmap='hot', interpolation='nearest')
-plt.show()
-
-plt.imshow(AVG_SCORES_TOKEN, cmap='hot', interpolation='nearest')
-plt.show()
-
-plt.imshow(AVG_SCORES_TFIDF, cmap='hot', interpolation='nearest')
-plt.show()
-"""
+for rep in DATA_REPS:
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.plot(RECALLS[rep], PRECISIONS[rep])
+    plt.title('Precision-Recall Curve: {}'.format(rep))
+    plt.show()
+# """
+scikit-learn/doc/tutorial/text_analytics/data/twenty_newsgroups/
